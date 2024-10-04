@@ -1,0 +1,9 @@
+1.usertrap
+2.it loads SYS_EXEC into a7 and calls ecall to reenter kernel
+3.previous mode was user mode
+4.lw	a3,0(zero) ----- a3
+5.0x80001c82 <syscall+16> lw a3,0(zero) #0x0 it is the same
+adress 0 is not mapped and it throws an error because of it. 
+mapping begins at 0x0c00000 as shown in figure 3.3.
+6.$1 = "initcode\000\000\000\000\000\000\000" pid = 1;
+name is initcode pid is 1.
