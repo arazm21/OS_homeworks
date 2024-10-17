@@ -364,6 +364,10 @@ typedef uint64 *pagetable_t; // 512 PTEs
 
 #ifdef LAB_PGTBL
 #define SUPERPGSIZE (2 * (1 << 20)) // bytes per page
+#define SUPERPAGECOUNT 32
+#define SUPERSTART (PHYSTOP - (SUPERPAGECOUNT*SUPERPGSIZE))
+#define NORMALSTART (uint64)end
+#define NORMALEND SUPERSTART
 #define SUPERPGROUNDUP(sz)  (((sz)+SUPERPGSIZE-1) & ~(SUPERPGSIZE-1))
 #endif
 
@@ -376,6 +380,7 @@ typedef uint64 *pagetable_t; // 512 PTEs
 #define PTE_X (1L << 3)
 #define PTE_U (1L << 4) // user can access
 
+#define PTE_S (1L << 9)
 
 
 #if defined(LAB_MMAP) || defined(LAB_PGTBL)

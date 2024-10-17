@@ -1,0 +1,14 @@
+1.we see that only the first four and last 3 pages are used in 
+the page table. everything else is empty, not dirty or anything, 
+not touched. the last 3 pages are 
+0x213 - user,valid, readable - could be a guard page.
+0x2c7 - valid readable writable accessed dirty - trapframe, as those
+are the permition bits of trapframes.
+0x24b - valid, readable, executable, accessed - this is the trampoline
+to communicate with the kernel, rx are the trampoline bits.
+0x0-0x4000 - user space memory, the one at the beggining is r,u AND x,
+so it could be user text, user data after that, and stack and heap after those,
+as they all have VRW bit active.
+2.it could be used for other purposes, such as determining
+the uptime of the system without needing a syscall. we could have
+a shared structure that is updated by the system.
