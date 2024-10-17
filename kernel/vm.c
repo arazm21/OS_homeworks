@@ -424,7 +424,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   uint flags;
   char *mem;
   int szinc;
-  //szinc = PGSIZE;
+  szinc = PGSIZE;
   for(i = 0; i < sz; i += szinc){
     
     if((pte = walk(old, i, 0)) == 0)
@@ -443,8 +443,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
         goto err;
         
       }
-      //i+=SUPERPGSIZE-PGSIZE;
-      szinc=SUPERPGSIZE;
+      i+=SUPERPGSIZE-PGSIZE;
     }else{
       if((mem = kalloc()) == 0)
         goto err;
@@ -453,7 +452,6 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
         kfree(mem);
         goto err;
       }
-      szinc=PGSIZE;
 
     }
   }
