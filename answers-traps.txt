@@ -1,0 +1,16 @@
+1.those would be the a registers, in this case, a2 for 13 and a1
+for 12, which has been optimised. the format is in a0.
+2.there are no calls beacuse the compiler inlined 
+the logic and precalculated the answer.
+3.jal 6bc <printf>, 0x6bc is the location.
+4.ra should be the address of the next instruction, so 0x34,
+the li instruction.
+5.$ call
+HE110 World$
+57616 in hex in E110.
+0x00646c72 - if read as a char*, each pair of hex numbers, from right
+to left will be read, 0x72 is r, 0x6c is l, and ends with 00, null character.
+if it were big-endian, we would need to write 0x726c6400.
+6.in my case, it does not compile and throws an error, but 
+if it did not, it would be undefined, as there could be 
+anything written in the stack.
