@@ -14,6 +14,9 @@ void freerange(void *pa_start, void *pa_end);
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
 
+int refcnts[(PHYSTOP) / PGSIZE] = {0};
+struct spinlock refcntslock;
+
 struct run {
   struct run *next;
 };
@@ -27,6 +30,7 @@ void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  initlock(&refcntslock, "refcntslock");
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -50,6 +54,16 @@ kfree(void *pa)
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
+
+  int index = (uint64)pa / PGSIZE;
+  acquire(&refcntslock);
+  refcnts[index]--;
+  if(refcnts[index] > 0) {
+    release(&refcntslock);
+    return;
+  }
+  release(&refcntslock);
+
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
@@ -76,7 +90,40 @@ kalloc(void)
     kmem.freelist = r->next;
   release(&kmem.lock);
 
+  int index = (uint64)r / PGSIZE;
+  acquire(&refcntslock);
+  refcnts[index] = 1;
+  release(&refcntslock);
+
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
+}
+
+void
+incref(uint64 pa)
+{
+  int index = (uint64)pa / PGSIZE;
+  acquire(&refcntslock);
+  refcnts[index]++;
+  release(&refcntslock);
+}
+
+void
+decref(uint64 pa)
+{
+  int index = (uint64)pa / PGSIZE;
+  acquire(&refcntslock);
+  refcnts[index]--;
+  release(&refcntslock);
+}
+
+int
+refcnt(uint64 pa)
+{
+  int index = (uint64)pa / PGSIZE;
+  acquire(&refcntslock);
+  int n = refcnts[index];
+  release(&refcntslock);
+  return n;
 }

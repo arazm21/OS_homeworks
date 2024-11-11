@@ -1,3 +1,4 @@
+//(this code in not plagiated, two of us worked on it together)
 #include "types.h"
 #include "param.h"
 #include "memlayout.h"
@@ -29,10 +30,42 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+int changemapping(pte_t* pte) {
+  uint64 mem;
+  uint64 prevmem = (uint64)PTE2PA(*pte);
+  uint64 flags = PTE_FLAGS(*pte);
+  
+  if(refcnt(prevmem) == 1) {
+    *pte = *pte | ((flags & (~PTE_C)) | PTE_W);
+    return 0;
+  }
+
+  if ( (!pte || !(*pte & PTE_V) || !(*pte & PTE_U))
+     || (!(*pte & PTE_C)) ){ 
+      setkilled(myproc());
+      return -1;
+    }
+
+
+  if((mem = (uint64)kalloc()) == 0) {
+    printf("usertrap(): no kalloc :(\n");
+    setkilled(myproc());
+    return -1;
+  }
+  else {
+    memmove((char*)mem, (char*)prevmem, PGSIZE);
+    *pte = PA2PTE((uint64)mem) | ((flags & (~PTE_C)) | PTE_W);
+    if(refcnt(prevmem) <= 0) return -1;
+    kfree((void*)prevmem);
+    return 0;
+  }
+}
+
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
 //
+
 void
 usertrap(void)
 {
@@ -65,6 +98,38 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if(r_scause() == 15) {
+    
+    pte_t* pte;
+    uint64 va = r_stval();
+    
+    if (va<PGSIZE || va >= p->sz){
+      setkilled(p); 
+    }
+
+    //va = PGROUNDDOWN(va);
+
+    if(va >= MAXVA) {
+      setkilled(p);
+      goto err2;
+    }
+
+    if((pte = walk(p->pagetable, va, 0)) == 0) {
+      setkilled(p);
+      goto err2;
+    }
+
+    if((*pte & PTE_C)!=0) {
+      if(changemapping(pte) < 0) {
+        setkilled(p);
+        goto err2;
+      }
+    } else {
+      setkilled(p); 
+      goto err2;
+    }
+
+
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
@@ -72,7 +137,7 @@ usertrap(void)
     printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
     setkilled(p);
   }
-
+  err2:
   if(killed(p))
     exit(-1);
 
