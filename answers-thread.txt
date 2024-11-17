@@ -1,0 +1,6 @@
+because on a single thread, everything happens in sequence, therefore
+there can not be issues. while in the example of 2 threads, there can be
+some issues. for example, when storing a number in a bucket, both
+threads may get to the part where they get the first unit of the linked
+list. if, for example, both realise that there is none, then the second
+thread will overwrite the first one and we will get an incorrect result.

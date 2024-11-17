@@ -13,7 +13,18 @@ struct entry {
   int value;
   struct entry *next;
 };
+
+struct put_argument{
+  long thread_number;
+  long total_thread_amount;
+  pthread_mutex_t* mutex;
+};
+// struct put_argument{
+//   long thread_number;
+//   pthread_mutex_t* mutex;
+// };
 struct entry *table[NBUCKET];
+pthread_mutex_t bucketMutexTable[NBUCKET];
 int keys[NKEYS];
 int nthread = 1;
 
@@ -27,7 +38,7 @@ now()
 }
 
 static void 
-insert(int key, int value, struct entry **p, struct entry *n)
+insert(int key, int value, struct entry **p, struct entry *n, int buckNum)
 {
   struct entry *e = malloc(sizeof(struct entry));
   e->key = key;
@@ -42,6 +53,8 @@ void put(int key, int value)
   int i = key % NBUCKET;
 
   // is the key already present?
+  pthread_mutex_lock(&bucketMutexTable[i]);
+
   struct entry *e = 0;
   for (e = table[i]; e != 0; e = e->next) {
     if (e->key == key)
@@ -52,8 +65,9 @@ void put(int key, int value)
     e->value = value;
   } else {
     // the new is new.
-    insert(key, value, &table[i], table[i]);
+    insert(key, value, &table[i], table[i],i);
   }
+  pthread_mutex_unlock(&bucketMutexTable[i]);
 
 }
 
@@ -71,14 +85,33 @@ get(int key)
   return e;
 }
 
+// static void *
+// put_thread(void *xa)
+// {
+//   struct put_argument* p = (struct put_argument*) xa;
+//   int n = (int) (long) p->thread_number; // thread number
+//   int b = NKEYS/nthread;
+
+//   for (int i = 0; i < b; i++) {
+//     pthread_mutex_lock((p->mutex));
+//     put(keys[b*n + i], n);
+//     pthread_mutex_unlock((p->mutex));
+//   }
+
+//   return NULL;
+// }
 static void *
 put_thread(void *xa)
 {
-  int n = (int) (long) xa; // thread number
+  struct put_argument* p = (struct put_argument*) xa;
+  int n = (int) (long) p->thread_number; // thread number
+  int tot = (int) p->thread_number;
   int b = NKEYS/nthread;
 
   for (int i = 0; i < b; i++) {
+    //pthread_mutex_lock((p->mutex));
     put(keys[b*n + i], n);
+    //pthread_mutex_unlock((p->mutex));
   }
 
   return NULL;
@@ -121,13 +154,27 @@ main(int argc, char *argv[])
   //
   // first the puts
   //
+  for(int i = 0; i < NBUCKET;i++){
+    pthread_mutex_init(&(bucketMutexTable[i]),NULL);
+  }
+
   t0 = now();
-  for(int i = 0; i < nthread; i++) {
-    assert(pthread_create(&tha[i], NULL, put_thread, (void *) (long) i) == 0);
+
+  pthread_mutex_t mutex;
+  pthread_mutex_init(&mutex, NULL);
+  struct put_argument *args = malloc(nthread * sizeof(struct put_argument));
+
+  for (int i = 0; i < nthread; i++) {
+    args[i].mutex = &mutex;
+    args[i].total_thread_amount=nthread;
+    args[i].thread_number = i;  // No need to cast i to long in this context
+    assert(pthread_create(&tha[i], NULL, put_thread, (void *)&args[i]) == 0);
   }
   for(int i = 0; i < nthread; i++) {
     assert(pthread_join(tha[i], &value) == 0);
   }
+  free(args);
+  pthread_mutex_destroy(&mutex);
   t1 = now();
 
   printf("%d puts, %.3f seconds, %.0f puts/second\n",
