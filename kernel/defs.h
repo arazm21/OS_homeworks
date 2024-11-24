@@ -67,7 +67,8 @@ void            ramdiskrw(struct buf*);
 void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
-
+void            kfreen(void *pa,int cpuN);
+struct run*     borrow(int OGCPU);
 // log.c
 void            initlog(int, struct superblock*);
 void            log_write(struct buf*);
