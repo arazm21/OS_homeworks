@@ -19,9 +19,36 @@ static uint8 host_mac[ETHADDR_LEN] = { 0x52, 0x55, 0x0a, 0x00, 0x02, 0x02 };
 
 static struct spinlock netlock;
 
+
+
+#define MAX_UDP_PORTS 32
+#define MAX_UDP_QUEUE 32
+
+struct udp_queue {
+    short port; // Bound port
+    struct mbuf *packets[MAX_UDP_QUEUE]; // Queue of packets
+    int head; // Head of the queue
+    int tail; // Tail of the queue
+    int count; // Number of packets in the queue
+};
+
+struct udp_queue udp_queues[MAX_UDP_PORTS];
+
+
+
+
+
+
+
 void
 netinit(void)
 {
+  for (int i = 0; i < MAX_UDP_PORTS; i++) {
+        udp_queues[i].port = -1; // Indicates the port is unbound
+        udp_queues[i].head = 0;
+        udp_queues[i].tail = 0;
+        udp_queues[i].count = 0;
+    }
   initlock(&netlock, "netlock");
 }
 
@@ -37,7 +64,17 @@ sys_bind(void)
   //
   // Your code here.
   //
-
+  short port;
+  argint(0,(int*)&port);
+  // if(port<0){
+  //   return -1;
+  // }
+  for(int i = 0; i < MAX_UDP_PORTS;i++){
+    if(udp_queues[i].port==-1){
+      udp_queues[i].port = port;
+      return 0;
+    }
+  }
   return -1;
 }
 
@@ -74,11 +111,20 @@ sys_unbind(void)
 uint64
 sys_recv(void)
 {
-  //
-  // Your code here.
-  //
-  return -1;
+    short dport;
+    int *src;
+    short *sport;
+    char *buf;
+    int maxlen;
+    argint(0, (int*)&dport);
+    argint(1, (int*)&src);
+    argint(2, (int*)&sport);
+    argint(3, (int*)&buf);
+    argint(4, &maxlen);
+
+    return 0;
 }
+
 
 // This code is lifted from FreeBSD's ping.c, and is copyright by the Regents
 // of the University of California.

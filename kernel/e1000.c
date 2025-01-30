@@ -94,29 +94,67 @@ e1000_init(uint32 *xregs)
 int
 e1000_transmit(char *buf, int len)
 {
-  //
-  // Your code here.
-  //
-  // buf contains an ethernet frame; program it into
-  // the TX descriptor ring so that the e1000 sends it. Stash
-  // a pointer so that it can be freed after send completes.
-  //
+  acquire(&e1000_lock);
 
-  
-  return 0;
+  int tail = regs[E1000_TDT];
+  struct tx_desc *curDesc = &tx_ring[tail];
+
+  if ((curDesc->status & E1000_TXD_STAT_DD)==0) {
+    release(&e1000_lock);
+    return -1; 
+  }
+  if (tx_bufs[tail]) {
+    kfree(tx_bufs[tail]);
+  }
+
+  tx_bufs[tail] = buf;
+  curDesc->length = len;
+  curDesc->addr = (uint64)buf;
+  curDesc->cmd = E1000_TXD_CMD_RS | E1000_TXD_CMD_EOP;
+  curDesc->status = 0; 
+
+  regs[E1000_TDT] = (tail + 1) % TX_RING_SIZE;
+
+  release(&e1000_lock);
+  return 0; 
 }
+
 
 static void
 e1000_recv(void)
 {
-  //
-  // Your code here.
-  //
-  // Check for packets that have arrived from the e1000
-  // Create and deliver a buf for each packet (using net_rx()).
-  //
+    while (1) {
+        // Get the index of the next packet to process
+        uint32 index = regs[E1000_RDT];
+        index = (index + 1) % RX_RING_SIZE;
 
+        // Check if a new packet is available
+        if (!(rx_ring[index].status & E1000_RXD_STAT_DD)) {
+            return; // No new packets
+        }
+
+        // Process the received packet
+        char *buf = (char *)rx_ring[index].addr; // Buffer containing the packet
+        int len = rx_ring[index].length;        // Length of the packet
+
+        // Pass the packet to the network stack
+        net_rx(buf, len);
+
+        // Allocate a new buffer for the RX descriptor
+        char *new_buf = kalloc();
+        if (!new_buf) {
+            panic("e1000_recv: out of memory");
+        }
+
+        // Update the RX descriptor with the new buffer
+        rx_ring[index].addr = (uint64)new_buf;
+        rx_ring[index].status = 0;
+
+        // Update the RDT register
+        regs[E1000_RDT] = index;
+    }
 }
+
 
 void
 e1000_intr(void)
