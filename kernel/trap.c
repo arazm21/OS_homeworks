@@ -73,24 +73,23 @@ usertrap(void)
     if(va >= p->sz ||  va < PGROUNDUP(p->trapframe->sp)){
       setkilled(myproc());
     }else{    
-      char *memory = kalloc();
+      char *newMem = kalloc();
       va = PGROUNDDOWN(va);
       
-      if(memory == 0){
+      if(newMem == 0){
         uvmdealloc(p->pagetable, va, va);
         setkilled(p);
       
       }else{
-        memset(memory, 0, PGSIZE);
-        if(mappages(p->pagetable, va, PGSIZE, (uint64)memory, PTE_R|PTE_U|PTE_W) != 0){
-          kfree(memory);
+        memset(newMem, 0, PGSIZE);
+        if(mappages(p->pagetable, va, PGSIZE, (uint64)newMem, PTE_R|PTE_U|PTE_W) != 0){
+          kfree(newMem);
           uvmdealloc(p->pagetable, va, va);
         }
       }
     }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     setkilled(p);
   }
 
