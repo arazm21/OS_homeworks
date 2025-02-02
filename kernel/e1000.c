@@ -91,78 +91,109 @@ e1000_init(uint32 *xregs)
   regs[E1000_IMS] = (1 << 7); // RXDW -- Receiver Descriptor Write Back
 }
 
+
 int
 e1000_transmit(char *buf, int len)
 {
-  acquire(&e1000_lock);
+    // Validate packet length
+    if (len > 2048) {
+        return -1; // Packet is too large
+    }
 
-  int tail = regs[E1000_TDT];
-  struct tx_desc *curDesc = &tx_ring[tail];
+    acquire(&e1000_lock);
 
-  if ((curDesc->status & E1000_TXD_STAT_DD)==0) {
+    // Get the index of the next descriptor to use
+    uint32 tail = regs[E1000_TDT];
+    struct tx_desc *desc = &tx_ring[tail];
+
+    // Check if the descriptor is ready (DD bit must be set)
+    if (!(desc->status & E1000_TXD_STAT_DD)) {
+        release(&e1000_lock);
+        return -1; // Descriptor is still in use
+    }
+
+    // Free the previous buffer if it exists
+    if (tx_bufs[tail]) {
+        kfree(tx_bufs[tail]);
+        tx_bufs[tail] = 0;
+    }
+
+    // Copy the new packet to a buffer
+    char *packet_buf = kalloc();
+    if (!packet_buf) {
+        release(&e1000_lock);
+        return -1; // Failed to allocate memory
+    }
+    memmove(packet_buf, buf, len);
+
+    // Set up the descriptor for transmission
+    desc->addr = (uint64)packet_buf;
+    desc->length = len;
+    desc->cmd = E1000_TXD_CMD_EOP | E1000_TXD_CMD_RS; // End of Packet and Report Status
+    desc->status = 0; // Clear the status
+
+    // Save the buffer for later freeing
+    tx_bufs[tail] = packet_buf;
+
+    // Advance the tail pointer
+    regs[E1000_TDT] = (tail + 1) % TX_RING_SIZE;
+
     release(&e1000_lock);
-    return -1; 
-  }
-  if (tx_bufs[tail]) {
-    kfree(tx_bufs[tail]);
-  }
-
-  tx_bufs[tail] = buf;
-  curDesc->length = len;
-  curDesc->addr = (uint64)buf;
-  curDesc->cmd = E1000_TXD_CMD_RS | E1000_TXD_CMD_EOP;
-  curDesc->status = 0; 
-
-  regs[E1000_TDT] = (tail + 1) % TX_RING_SIZE;
-
-  release(&e1000_lock);
-  return 0; 
+    return 0; // Success
 }
 
 
 static void
 e1000_recv(void)
 {
-    while (1) {
-        // Get the index of the next packet to process
-        uint32 index = regs[E1000_RDT];
-        index = (index + 1) % RX_RING_SIZE;
+    // Start from the next descriptor after RDT
+    uint32 tail = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
 
-        // Check if a new packet is available
-        if (!(rx_ring[index].status & E1000_RXD_STAT_DD)) {
-            return; // No new packets
+    while (1) {
+        struct rx_desc *desc = &rx_ring[tail];
+
+        // Check if the descriptor contains a new packet
+        if (!(desc->status & E1000_RXD_STAT_DD)) {
+            break; // No more packets to process
         }
 
-        // Process the received packet
-        char *buf = (char *)rx_ring[index].addr; // Buffer containing the packet
-        int len = rx_ring[index].length;        // Length of the packet
+        // Ensure the packet is complete
+        if (!(desc->status & E1000_RXD_STAT_EOP)) {
+            panic("e1000_recv: Packet is not complete");
+        }
 
-        // Pass the packet to the network stack
-        net_rx(buf, len);
+        // Extract the received packet
+        char *packet = (char *)desc->addr;
+        int length = desc->length;
 
-        // Allocate a new buffer for the RX descriptor
+        // Deliver the packet to the network stack
+        net_rx(packet, length);
+
+        // Allocate a new buffer to replace the processed one
         char *new_buf = kalloc();
         if (!new_buf) {
-            panic("e1000_recv: out of memory");
+            panic("e1000_recv: Failed to allocate memory for RX buffer");
         }
 
-        // Update the RX descriptor with the new buffer
-        rx_ring[index].addr = (uint64)new_buf;
-        rx_ring[index].status = 0;
+        // Update the descriptor with the new buffer
+        desc->addr = (uint64)new_buf;
+        desc->status = 0; // Clear the status to mark the descriptor as free
 
-        // Update the RDT register
-        regs[E1000_RDT] = index;
+        // Advance to the next descriptor
+        tail = (tail + 1) % RX_RING_SIZE;
     }
+
+    // Update the RDT register to inform the E1000 of the new tail position
+    regs[E1000_RDT] = (tail - 1 + RX_RING_SIZE) % RX_RING_SIZE;
 }
 
 
 void
 e1000_intr(void)
 {
-  // tell the e1000 we've seen this interrupt;
-  // without this the e1000 won't raise any
-  // further interrupts.
+  // Acknowledge all interrupts
   regs[E1000_ICR] = 0xffffffff;
-
+  
+  // Process received packets
   e1000_recv();
 }

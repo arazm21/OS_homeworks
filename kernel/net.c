@@ -21,19 +21,67 @@ static struct spinlock netlock;
 
 
 
-#define MAX_UDP_PORTS 32
-#define MAX_UDP_QUEUE 32
-
-struct udp_queue {
-    short port; // Bound port
-    struct mbuf *packets[MAX_UDP_QUEUE]; // Queue of packets
-    int head; // Head of the queue
-    int tail; // Tail of the queue
-    int count; // Number of packets in the queue
+// Structure to track packets queued for a bound port
+struct udp_sock {
+  int port;               // Port in host byte order
+  struct spinlock lock;   // Protects the queue
+  char *pkts[16];        // Queue of packet buffers
+  uint len[16];          // Length of each packet
+  int head;              // Index for next packet to receive
+  int tail;              // Index for next packet to queue
+  int count;             // Number of packets currently queued
+  int bound;             // Whether this port is bound
 };
 
-struct udp_queue udp_queues[MAX_UDP_PORTS];
+#define NSOCK 32  // Maximum number of bound ports
+struct {
+  struct spinlock lock;      // Protects socks array
+  struct udp_sock socks[NSOCK];
+} udp_table;
 
+// Find a socket for the given port
+static struct udp_sock*
+get_sock(int port)
+{
+  for(int i = 0; i < NSOCK; i++) {
+    if(udp_table.socks[i].bound && udp_table.socks[i].port == port)
+      return &udp_table.socks[i];
+  }
+  return 0;
+}
+
+uint64
+sys_bind(void)
+{
+  int port;
+  argint(0, &port);
+
+  acquire(&udp_table.lock);
+  
+  // Find free socket
+  struct udp_sock *sock = 0;
+  for(int i = 0; i < NSOCK; i++) {
+    if(!udp_table.socks[i].bound) {
+      sock = &udp_table.socks[i];
+      break;
+    }
+  }
+
+  if(!sock) {
+    release(&udp_table.lock);
+    return -1;
+  }
+
+  // Initialize socket
+  sock->port = port;
+  sock->head = 0;
+  sock->tail = 0;
+  sock->count = 0;
+  sock->bound = 1;
+  
+  release(&udp_table.lock);
+  return 0;
+}
 
 
 
@@ -43,39 +91,13 @@ struct udp_queue udp_queues[MAX_UDP_PORTS];
 void
 netinit(void)
 {
-  for (int i = 0; i < MAX_UDP_PORTS; i++) {
-        udp_queues[i].port = -1; // Indicates the port is unbound
-        udp_queues[i].head = 0;
-        udp_queues[i].tail = 0;
-        udp_queues[i].count = 0;
-    }
   initlock(&netlock, "netlock");
-}
 
-
-//
-// bind(int port)
-// prepare to receive UDP packets address to the port,
-// i.e. allocate any queues &c needed.
-//
-uint64
-sys_bind(void)
-{
-  //
-  // Your code here.
-  //
-  short port;
-  argint(0,(int*)&port);
-  // if(port<0){
-  //   return -1;
-  // }
-  for(int i = 0; i < MAX_UDP_PORTS;i++){
-    if(udp_queues[i].port==-1){
-      udp_queues[i].port = port;
-      return 0;
-    }
+  initlock(&udp_table.lock, "udp_table");
+  for (int i = 0; i < NSOCK; i++) {
+    initlock(&udp_table.socks[i].lock, "udp_socket");
+    udp_table.socks[i].bound = 0;
   }
-  return -1;
 }
 
 //
@@ -111,18 +133,66 @@ sys_unbind(void)
 uint64
 sys_recv(void)
 {
-    short dport;
-    int *src;
-    short *sport;
-    char *buf;
-    int maxlen;
-    argint(0, (int*)&dport);
-    argint(1, (int*)&src);
-    argint(2, (int*)&sport);
-    argint(3, (int*)&buf);
-    argint(4, &maxlen);
+  int dport;
+  uint64 src_addr, sport_addr, buf;
+  int maxlen;
 
-    return 0;
+  argint(0, &dport);
+  argaddr(1, &src_addr);
+  argaddr(2, &sport_addr);
+  argaddr(3, &buf);
+  argint(4, &maxlen);
+
+  acquire(&udp_table.lock);
+  struct udp_sock *sock = get_sock(dport);
+  if(!sock) {
+    release(&udp_table.lock);
+    return -1;
+  }
+
+  acquire(&sock->lock);
+  release(&udp_table.lock);
+
+  // Wait for packet
+  while(sock->count == 0) {
+    sleep(sock, &sock->lock);
+  }
+
+  // Get packet from queue
+  char *pkt = sock->pkts[sock->head];
+  sock->head = (sock->head + 1) % 16;
+  sock->count--;
+
+  // Extract headers
+  struct ip *iphdr = (struct ip*)(pkt + sizeof(struct eth));
+  struct udp *udphdr = (struct udp*)(pkt + sizeof(struct eth) + sizeof(struct ip));
+
+  // Convert to host byte order for user
+  int src = ntohl(iphdr->ip_src);
+  short sport = ntohs(udphdr->sport);
+
+  // Copy out data to user space
+  if(copyout(myproc()->pagetable, src_addr, (char*)&src, sizeof(int)) < 0 ||
+     copyout(myproc()->pagetable, sport_addr, (char*)&sport, sizeof(short)) < 0) {
+    kfree(pkt);
+    release(&sock->lock);
+    return -1;
+  }
+
+  // Copy packet payload
+  char *payload = pkt + sizeof(struct eth) + sizeof(struct ip) + sizeof(struct udp);
+  int len = ntohs(udphdr->ulen) - sizeof(struct udp);
+  if(len > maxlen)
+    len = maxlen;
+  if(copyout(myproc()->pagetable, buf, payload, len) < 0) {
+    kfree(pkt);
+    release(&sock->lock);
+    return -1;
+  }
+
+  kfree(pkt);
+  release(&sock->lock);
+  return len;
 }
 
 
@@ -228,16 +298,55 @@ sys_send(void)
 void
 ip_rx(char *buf, int len)
 {
-  // don't delete this printf; make grade depends on it.
   static int seen_ip = 0;
   if(seen_ip == 0)
     printf("ip_rx: received an IP packet\n");
   seen_ip = 1;
 
-  //
-  // Your code here.
-  //
-  
+  if(len < sizeof(struct eth) + sizeof(struct ip))
+    return;
+
+  struct ip *iphdr = (struct ip*)(buf + sizeof(struct eth));
+  if(iphdr->ip_p != IPPROTO_UDP)
+    return;
+
+  if(len < sizeof(struct eth) + sizeof(struct ip) + sizeof(struct udp))
+    return;
+
+  struct udp *udphdr = (struct udp*)(buf + sizeof(struct eth) + sizeof(struct ip));
+  int dport = ntohs(udphdr->dport);  // Convert to host byte order to match bound ports
+
+  acquire(&udp_table.lock);
+  struct udp_sock *sock = get_sock(dport);
+  if(!sock) {
+    release(&udp_table.lock);
+    return;
+  }
+
+  acquire(&sock->lock);
+  release(&udp_table.lock);
+
+  if(sock->count >= 16) {
+    release(&sock->lock);
+    return;
+  }
+
+  // Allocate and copy packet
+  char *pkt = kalloc();
+  if(!pkt) {
+    release(&sock->lock);
+    return;
+  }
+  memmove(pkt, buf, len);
+
+  // Queue packet
+  sock->pkts[sock->tail] = pkt;
+  sock->len[sock->tail] = len;
+  sock->tail = (sock->tail + 1) % 16;
+  sock->count++;
+
+  wakeup(sock);
+  release(&sock->lock);
 }
 
 //
