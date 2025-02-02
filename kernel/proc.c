@@ -55,6 +55,7 @@ procinit(void)
       initlock(&p->lock, "proc");
       p->state = UNUSED;
       p->kstack = KSTACK((int) (p - proc));
+      for (int i = 0; i < 64; i++) p->vmas[i].valid = 0;
   }
 }
 
@@ -254,6 +255,16 @@ userinit(void)
   release(&p->lock);
 }
 
+
+void copy_vma(struct proc *op, struct proc *np) {
+    for(int i = 0; i < 64; i++) {
+        if(op->vmas[i].valid) {
+            np->vmas[i] = op->vmas[i];
+            filedup(op->vmas[i].file);
+        }
+    }
+}
+
 // Grow or shrink user memory by n bytes.
 // Return 0 on success, -1 on failure.
 int
@@ -309,7 +320,7 @@ fork(void)
   np->cwd = idup(p->cwd);
 
   safestrcpy(np->name, p->name, sizeof(p->name));
-
+  copy_vma(p, np);
   pid = np->pid;
 
   release(&np->lock);

@@ -503,3 +503,111 @@ sys_pipe(void)
   }
   return 0;
 }
+
+
+
+uint64 sys_mmap(void) {
+    uint64 addr, size;
+    int perm, flags, file_desc, file_offset;
+    struct proc *proc = myproc();
+    struct file *file_ptr;
+
+    argaddr(0, &addr);
+    argaddr(1, &size);
+    argint(2, &perm);
+    argint(3, &flags);
+    argint(4, &file_desc);
+    argint(5, &file_offset);
+
+    if (addr != 0 || size <= 0 || perm < 0 || flags < 0 || file_offset != 0) return -1;
+    if (file_desc < 0 || file_desc >= NOFILE || (file_ptr = proc->ofile[file_desc]) == 0) return -1; 
+    if (((perm & PROT_READ) && !(file_ptr->readable))||((perm & PROT_WRITE) && !(file_ptr->writable) && (flags & MAP_SHARED)))  return -1;
+
+    struct vma* vma = 0;
+    for (int i = 0; i < 64; i++) {
+        if (!proc->vmas[i].valid) {
+            proc->vmas[i].valid = 1;
+            vma = &proc->vmas[i];
+            break;
+        }
+    }
+    if (!vma) return -1;
+
+    uint64 alloc_addr = PGROUNDUP(proc->sz);
+    proc->sz += size;
+    if (alloc_addr + size >= MAXVA) {
+        return -1;
+    }
+
+    vma->addr = alloc_addr;
+    vma->perm = perm;
+    vma->flags = flags;
+    vma->len = size;
+    vma->file = filedup(file_ptr);
+    vma->offset = file_offset;
+    vma->valid = 1;
+
+    return alloc_addr;
+}
+
+
+
+
+
+// -------------------------------------------
+uint64 sys_munmap(void) {
+    uint64 vaddr, size;
+    struct proc *proc = myproc();
+    struct file *file_ptr;
+
+    argaddr(0, &vaddr);
+    argaddr(1, &size);
+
+    
+    struct vma *region = 0;
+    for (int i = 0; i < 64; i++) {
+        if (proc->vmas[i].valid && vaddr >= proc->vmas[i].addr && vaddr < proc->vmas[i].addr + proc->vmas[i].len) {
+            region = &proc->vmas[i];
+            break;
+        }
+    }
+
+    
+    uint64 writable_size = size;
+    file_ptr = region->file;
+
+    if (size == region->len) {
+        if (region->flags & MAP_SHARED) {
+            if (writable_size + region->offset > file_ptr->ip->size) {
+                writable_size = file_ptr->ip->size - region->offset;
+            }
+            begin_op();
+            ilock(file_ptr->ip);
+            writei(file_ptr->ip, 1, vaddr, region->offset, writable_size);
+            iunlock(file_ptr->ip);
+            end_op();
+        }
+        uvmunmap(proc->pagetable, vaddr, PGROUNDUP(size) / PGSIZE, 1);
+        fileclose(file_ptr);
+        region->valid = 0;
+        memset(region, 0, sizeof(*region));
+    } else {
+        if (region->addr == vaddr) {
+            region->addr += size;
+            region->offset += size;
+            region->len -= size;
+        } else {
+            region->len -= size;
+        }
+        if (writable_size + region->offset + vaddr - region->addr > file_ptr->ip->size) {
+            writable_size = file_ptr->ip->size - (region->offset + vaddr - region->addr);
+        }
+        begin_op();
+        ilock(file_ptr->ip);
+        writei(file_ptr->ip, 1, vaddr, region->offset + vaddr - region->addr, writable_size);
+        iunlock(file_ptr->ip);
+        end_op();
+        uvmunmap(proc->pagetable, vaddr, PGROUNDUP(size) / PGSIZE, 1);
+    }
+    return 0;
+}

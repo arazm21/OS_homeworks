@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fs.h"
+#include "sleeplock.h"
+#include "file.h"
+#include "fcntl.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -65,6 +69,48 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if(r_scause() == 13 || r_scause() == 15) {
+    struct proc *p = myproc();
+    struct vma *vma = 0;
+    uint64 argaddr = r_stval();
+
+    // Find the corresponding VMA
+    for (int i = 0; i < 64; i++) {
+        if (p->vmas[i].valid 
+        && argaddr >= p->vmas[i].addr &&
+            argaddr < p->vmas[i].addr + p->vmas[i].len
+            ) {
+            vma = &p->vmas[i];
+            break;
+        }
+    }
+
+    // If no valid VMA or write access violation, kill the process
+    if (!vma || ((vma->perm & PROT_WRITE) == 0 && r_scause() == 15)) {
+        printf("no valid VMA or write access violation");
+        setkilled(p);
+    } else {
+        uint64 page_addr = PGROUNDDOWN(argaddr);
+        char *mem = kalloc();
+
+        if (!mem) {
+            printf("no more memory");
+            setkilled(p);
+            return;
+        }
+        memset(mem, 0, PGSIZE);
+        ilock(vma->file->ip);
+        readi(vma->file->ip, 0, (uint64)mem, vma->offset + (page_addr - vma->addr), PGSIZE);
+        iunlock(vma->file->ip);
+        if (mappages(p->pagetable, page_addr, PGSIZE, (uint64)mem, 
+                     PTE_U | (vma->perm & PROT_READ ? PTE_R : 0) | 
+                     (vma->perm & PROT_WRITE ? PTE_W : 0)) != 0) {
+            kfree(mem);
+            printf("map failed");
+            setkilled(p);
+        }
+    }
+   
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
